@@ -98,7 +98,10 @@ class HomeGuardService : AccessibilityService() {
     private val foregroundCheck = object : Runnable {
         override fun run() {
             handler.postDelayed(this, FOREGROUND_POLL_MS)
-            if (screenOff || !GuardSetup.isUserUnlocked(this@HomeGuardService) || isDefaultHome()) return
+            // Not skipped where Aerial is the default Home, for the same reason as the Home key:
+            // Panasonic DX01C (Skyworth-made, Tianci, Android 6) shows its own launcher at power-on
+            // and on the Home key whatever Home resolves to.
+            if (screenOff || !GuardSetup.isUserUnlocked(this@HomeGuardService)) return
             if (SystemClock.uptimeMillis() < allowStockUntil) return
             val (window, at) = foreground() ?: return
             if (at <= foregroundTakenAt) return
@@ -214,7 +217,10 @@ class HomeGuardService : AccessibilityService() {
      */
     private val homeKey = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.getStringExtra("reason") != "homekey" || isDefaultHome()) return
+            // Not skipped where Aerial is the default Home: Panasonic DX01C (Skyworth-made, Tianci,
+            // Android 6) answers the Home key by starting its own launcher by component, and Home
+            // resolution never happens.
+            if (intent.getStringExtra("reason") != "homekey") return
             val front = lastWindow?.first
             if (front != null && front !in stockHomes) return
             // The stock launcher's window change usually comes first and already brought Aerial
@@ -761,7 +767,9 @@ class HomeGuardService : AccessibilityService() {
         // (LeTV Zero65 Pro, eUI 8.2, Android 6; reported with a local build in issue #121).
         stockHomes = homes.mapValues { (pkg, classes) ->
             classes + HOME_SCREENS_BEHIND_TRAMPOLINES[pkg].orEmpty().filter { isActivity(pkg, it) }
-        }
+        } + FIRMWARE_HOMES_WITHOUT_FILTER.mapValues { (pkg, classes) ->
+            classes.filter { isActivity(pkg, it) }.toSet()
+        }.filterValues { it.isNotEmpty() }
     }
 
     /** Android's own SECONDARY_HOME is for other displays, and comes with CATEGORY_HOME anyway. */
@@ -836,6 +844,17 @@ class HomeGuardService : AccessibilityService() {
             // Tencent 极光 boxes: Home is LauncherMainActivity, the screen shown is this one
             // (极光盒子 6SE Q0102, Android 10, issue #270; 7S, Android 14, #269).
             "com.ktcp.launcher" to listOf("com.ktcp.launcher.activity.LauncherHomeSingleTaskActivity"),
+        )
+
+        /**
+         * Launcher screens a firmware starts by component that declare no Home filter at all, by
+         * package: they match neither CATEGORY_HOME nor a vendor category, so the guard would take
+         * them for an app the viewer had opened. Panasonic DX01C (Skyworth-made, Tianci, Android 6)
+         * starts this one from /system/pcfg's DEFAULT_HOMEPAGE, and it declares only the private
+         * action com.skyworth.home.neo, which left it in front at power-on and on the Home key.
+         */
+        private val FIRMWARE_HOMES_WITHOUT_FILTER = mapOf(
+            "com.skyworth.panasonichome" to listOf("com.skyworth.panasonichome.MainActivity"),
         )
 
         /**
